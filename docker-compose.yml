@@ -1,0 +1,67 @@
+services:
+  # Elasticsearch 搜索引擎
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.11.0
+    container_name: es-demo-elasticsearch
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - "ES_JAVA_OPTS=-Xms256m -Xmx256m"
+      - cluster.name=es-demo-cluster
+    volumes:
+      - es-data:/usr/share/elasticsearch/data
+    ports:
+      - "9200:9200"
+    networks:
+      - es-network
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9200/ || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+
+  # Kibana 可视化（可选，需显式启用）
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.11.0
+    container_name: es-demo-kibana
+    profiles:
+      - kibana
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+    ports:
+      - "5601:5601"
+    networks:
+      - es-network
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+
+  # C++ 演示程序
+  cpp-demo:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: es-demo-cpp
+    environment:
+      - ES_HOST=elasticsearch
+      - ES_PORT=9200
+    networks:
+      - es-network
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    stdin_open: true
+    tty: true
+
+networks:
+  es-network:
+    driver: bridge
+
+volumes:
+  es-data:
+    driver: local
+
+# 使用说明：
+# - 默认启动: docker-compose up -d (仅 ES + C++ Demo)
+# - 启用 Kibana: docker-compose --profile kibana up -d

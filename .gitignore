@@ -1,12 +1,134 @@
-.env
-*.key
-*.pem
-node_modules/
-.venv/
-venv/
-dist/
+# =========================
+# C++ 编译产物
+# =========================
+*.o
+*.obj
+*.so
+*.dylib
+*.dll
+*.a
+*.lib
+*.exe
+*.out
+
+# CMake 构建目录
 build/
-coverage/
-__pycache__/
-*.py[cod]
+cmake-build-*/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+*.cmake
+
+# =========================
+# IDE 和编辑器
+# =========================
+# Visual Studio
+.vs/
+*.vcxproj
+*.vcxproj.filters
+*.vcxproj.user
+*.sln
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# Visual Studio Code
+.vscode/
+
+# CLion
+.idea/
+*.iml
+
+# Xcode
+*.xcodeproj/
+*.xcworkspace/
+xcuserdata/
+
+# Eclipse
+.project
+.cproject
+.settings/
+
+# =========================
+# 操作系统文件
+# =========================
+# macOS
 .DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Linux
+*~
+.directory
+
+# =========================
+# Docker
+# =========================
+# Docker 数据卷（本地开发）
+docker-data/
+es-data/
+kibana-data/
+
+# =========================
+# 日志和临时文件
+# =========================
+*.log
+*.tmp
+*.temp
+*.swp
+*.swo
+*.bak
+
+# =========================
+# 依赖和包管理
+# =========================
+# vcpkg
+vcpkg_installed/
+
+# Conan
+conan/
+conanbuildinfo.*
+conaninfo.txt
+graph_info.json
+
+# =========================
+# 测试和覆盖率
+# =========================
+Testing/
+coverage/
+*.gcno
+*.gcda
+*.gcov
+
+# =========================
+# 文档生成
+# =========================
+docs/html/
+docs/latex/
+doxygen/
+
+# =========================
+# 其他
+# =========================
+# 环境变量文件
+.env
+.env.*
+!.env.example
+.env.local
+.env.*.local
+*.pem
+*.key
+credentials*
+secrets*
+
+# 备份文件
+*.backup
+*.orig
