@@ -11,17 +11,19 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     add_compile_options(-Wall -Wextra -Wpedantic)
 endif()
 
-# 查找 libcurl
-find_package(CURL REQUIRED)
+# libcurl 仅主程序 es_demo 需要；离线回执演示与单元测试不依赖它。
+find_package(CURL QUIET)
 
 # ==================== nlohmann/json 依赖 ====================
-# 自动下载 nlohmann/json 头文件（如果不存在）
-set(JSON_HPP_PATH "${CMAKE_SOURCE_DIR}/include/json.hpp")
-if(NOT EXISTS ${JSON_HPP_PATH})
+# 优先使用仓库内置的多文件版本（include/nlohmann/json.hpp）；
+# 否则回退为单头文件 include/json.hpp，缺失时自动下载。
+set(NLOHMANN_DIR "${CMAKE_SOURCE_DIR}/include/nlohmann")
+set(JSON_SINGLE_HEADER "${CMAKE_SOURCE_DIR}/include/json.hpp")
+if(NOT EXISTS "${NLOHMANN_DIR}/json.hpp" AND NOT EXISTS ${JSON_SINGLE_HEADER})
     message(STATUS "正在下载 nlohmann/json...")
     file(DOWNLOAD
         "https://github.com/nlohmann/json/releases/download/v3.11.3/json.hpp"
-        ${JSON_HPP_PATH}
+        ${JSON_SINGLE_HEADER}
         SHOW_PROGRESS
         STATUS DOWNLOAD_STATUS
     )
@@ -32,30 +34,55 @@ if(NOT EXISTS ${JSON_HPP_PATH})
     message(STATUS "nlohmann/json 下载完成")
 endif()
 
-# 头文件目录
-include_directories(${CMAKE_SOURCE_DIR}/include)
-include_directories(${CURL_INCLUDE_DIRS})
+# ==================== 主程序（需要 libcurl） ====================
+if(CURL_FOUND)
+    include_directories(${CURL_INCLUDE_DIRS})
 
-# 源文件
-set(SOURCES
-    src/main.cpp
-    src/http_client.cpp
-    src/es_client.cpp
+    set(SOURCES
+        src/main.cpp
+        src/http_client.cpp
+        src/es_client.cpp
+        src/bulk_indexer.cpp
+        src/bulk_transport_http.cpp
+    )
+
+    add_executable(es_demo ${SOURCES})
+    target_include_directories(es_demo PRIVATE ${CMAKE_SOURCE_DIR}/include)
+    target_link_libraries(es_demo PRIVATE ${CURL_LIBRARIES})
+
+    install(TARGETS es_demo DESTINATION bin)
+
+    message(STATUS "已配置主程序 es_demo")
+    message(STATUS "CURL 头文件目录: ${CURL_INCLUDE_DIRS}")
+    message(STATUS "CURL 库: ${CURL_LIBRARIES}")
+else()
+    message(WARNING "未找到 libcurl，跳过主程序 es_demo；离线演示与单元测试仍可构建")
+endif()
+
+# ==================== 离线演示与单元测试（不依赖 libcurl/真实 ES） ====================
+# 只链接批量写入的纯逻辑部分；传输层在演示/测试中由脚本化内存版 ES 代替。
+add_executable(bulk_receipt_demo
+    demo/bulk_receipt_demo.cpp
+    src/bulk_indexer.cpp
+)
+target_include_directories(bulk_receipt_demo PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/testutil
 )
 
-# 可执行文件
-add_executable(es_demo ${SOURCES})
+add_executable(test_bulk_indexer
+    tests/test_bulk_indexer.cpp
+    src/bulk_indexer.cpp
+)
+target_include_directories(test_bulk_indexer PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/testutil
+)
 
-# 链接库
-target_link_libraries(es_demo PRIVATE ${CURL_LIBRARIES})
-
-# 安装规则
-install(TARGETS es_demo DESTINATION bin)
+enable_testing()
+add_test(NAME bulk_indexer COMMAND test_bulk_indexer)
 
 # 复制数据文件到构建目录
 file(COPY ${CMAKE_SOURCE_DIR}/data DESTINATION ${CMAKE_BINARY_DIR})
 
-# 输出配置信息
 message(STATUS "C++ 标准: ${CMAKE_CXX_STANDARD}")
-message(STATUS "CURL 头文件目录: ${CURL_INCLUDE_DIRS}")
-message(STATUS "CURL 库: ${CURL_LIBRARIES}")

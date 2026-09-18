@@ -51,6 +51,9 @@ services:
     depends_on:
       elasticsearch:
         condition: service_healthy
+    # 先运行离线的批量导入逐项回执演示（含 429/断连/mapping 坏记录），
+    # 再运行依赖真实 ES 的全文检索演示
+    command: ["sh", "-c", "./bulk_receipt_demo && ./es_demo"]
     stdin_open: true
     tty: true
 

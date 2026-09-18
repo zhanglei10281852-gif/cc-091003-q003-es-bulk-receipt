@@ -2,7 +2,8 @@
 #define ES_CLIENT_HPP
 
 #include "http_client.hpp"
-#include "json.hpp"
+#include "bulk_indexer.hpp"
+#include "nlohmann/json.hpp"
 #include <string>
 #include <vector>
 #include <optional>
@@ -159,11 +160,27 @@ public:
                         const std::string& id);
     
     /**
-     * 批量索引文档
+     * 批量索引文档（旧接口：仅给出成功/失败计数）。
+     * 新代码请使用 bulkIndexWithReceipts 获取逐项回执与可控重试。
      */
     BulkResult bulkIndex(const std::string& indexName,
                          const std::vector<json>& docs,
                          const std::vector<std::string>& ids = {});
+
+    /**
+     * 带逐项回执的批量索引：可控分块、有上限退避重试、结果保持原输入顺序。
+     *
+     * @param docs    文档数组，每个元素必须是 JSON 对象
+     * @param ids     与 docs 一一对应的稳定业务 ID（必填，不允许空/重复）
+     * @param options 分块条数与字节上限
+     * @param retry   重试策略，sleeper/jitter 可替换为测试替身
+     * @throws BulkValidationError 发送前校验失败（空批次/ID 不匹配/单条超限等）
+     */
+    BulkReport bulkIndexWithReceipts(const std::string& indexName,
+                                     const std::vector<json>& docs,
+                                     const std::vector<std::string>& ids,
+                                     const BulkOptions& options = BulkOptions{},
+                                     const RetryPolicy& retry = RetryPolicy{});
     
     // ==================== 搜索操作 ====================
     

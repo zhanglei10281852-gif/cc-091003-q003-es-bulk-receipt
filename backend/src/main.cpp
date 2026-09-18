@@ -172,22 +172,65 @@ void demoCreateIndex(ESClient& client, const std::string& indexName) {
 }
 
 void demoBulkIndex(ESClient& client, const std::string& indexName) {
-    printSection(3, "批量导入文档");
-    
+    printSection(3, "批量导入文档（逐项回执）");
+
     auto articles = getSampleArticles();
     std::vector<std::string> ids = {"1", "2", "3", "4", "5"};
-    
+
     try {
-        auto result = client.bulkIndex(indexName, articles, ids);
-        printSuccess("成功导入 " + std::to_string(result.successCount) + " 篇文章");
-        
-        if (result.failCount > 0) {
-            printError("失败 " + std::to_string(result.failCount) + " 篇");
+        // 每批 2 条、最多 3 次尝试的指数退避（真实时钟）
+        BulkOptions options{2, 5 * 1024 * 1024};
+        RetryPolicy retry;
+        retry.maxAttempts = 3;
+        auto report = client.bulkIndexWithReceipts(indexName, articles, ids,
+                                                   options, retry);
+
+        // 表头
+        std::cout << "\n  " << Color::BOLD
+                  << "序号  业务ID  最终状态          尝试  HTTP  ES结果"
+                  << Color::RESET << "\n";
+        for (const auto& r : report.items) {
+            std::string color = Color::GREEN;
+            if (r.status == ItemStatus::INDEXED_AFTER_RETRY) color = Color::YELLOW;
+            if (r.status == ItemStatus::PERMANENT_FAILURE ||
+                r.status == ItemStatus::RETRY_EXHAUSTED) color = Color::RED;
+            if (r.status == ItemStatus::UNCONFIRMED) color = Color::YELLOW;
+
+            std::cout << "  " << (r.index + 1) << "     "
+                      << r.id << "       "
+                      << color << toString(r.status) << Color::RESET << "      "
+                      << r.attempts << "     "
+                      << (r.httpStatus == 0 ? std::string("断连")
+                                            : std::to_string(r.httpStatus))
+                      << "    " << (r.written() ? r.esResult : r.errorReason)
+                      << "\n";
         }
-        
+
+        std::cout << "\n  " << Color::GREEN
+                  << "已写入 " << report.indexedCount() << Color::RESET << "，"
+                  << Color::YELLOW << "重试后写入 "
+                  << report.indexedAfterRetryCount() << Color::RESET << "，"
+                  << Color::RED << "不可重试失败 "
+                  << report.permanentFailureCount() << Color::RESET << "，"
+                  << "重试耗尽 " << report.retryExhaustedCount() << "，"
+                  << "结果未确认 " << report.unconfirmedCount() << "\n";
+        std::cout << "  计划分块 " << report.chunksPlanned << " 个，实际发送 "
+                  << report.requestsSent << " 次\n";
+
+        if (report.failedCount() == 0) {
+            printSuccess("全部 " + std::to_string(report.writtenCount()) +
+                         " 篇文章导入成功");
+        } else {
+            printError(std::to_string(report.failedCount()) +
+                       " 篇未写入，请按回执中的错误原因处置后以相同业务 ID 重提");
+        }
+
         // 刷新索引使文档可搜索
         client.refreshIndex(indexName);
         printInfo("索引已刷新，文档可搜索");
+    } catch (const BulkValidationError& e) {
+        printError(std::string("批次在发送前被拒绝: ") + e.what());
+        throw;
     } catch (const std::exception& e) {
         printError(std::string("批量导入失败: ") + e.what());
         throw;

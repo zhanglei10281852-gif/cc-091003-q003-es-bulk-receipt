@@ -255,6 +255,27 @@ BulkResult ESClient::bulkIndex(const std::string& indexName,
     return result;
 }
 
+BulkReport ESClient::bulkIndexWithReceipts(const std::string& indexName,
+                                           const std::vector<json>& docs,
+                                           const std::vector<std::string>& ids,
+                                           const BulkOptions& options,
+                                           const RetryPolicy& retry) {
+    HttpBulkTransport transport(httpClient_, baseUrl_);
+    BulkIndexer indexer(transport, indexName, options, retry);
+    BulkReport report = indexer.run(docs, ids);
+
+    std::ostringstream oss;
+    oss << "批量导入完成：计划 " << report.chunksPlanned << " 块，实际发送 "
+        << report.requestsSent << " 次；写入 " << report.writtenCount()
+        << " 篇（其中重试后写入 " << report.indexedAfterRetryCount()
+        << " 篇），未写入 " << report.failedCount() << " 篇（永久失败 "
+        << report.permanentFailureCount() << "、重试耗尽 "
+        << report.retryExhaustedCount() << "、结果未确认 "
+        << report.unconfirmedCount() << "）";
+    log(oss.str());
+    return report;
+}
+
 // ==================== 搜索操作 ====================
 
 SearchResult ESClient::parseSearchResponse(const json& response) {

@@ -37,7 +37,48 @@ classDiagram
         +deleteDocument(index, id)
         +search(index, query)
         +bulkIndex(index, docs)
+        +bulkIndexWithReceipts(index, docs, ids, options, retry) BulkReport
     }
+
+    class BulkIndexer {
+        -BulkTransport transport
+        -BulkOptions options
+        -RetryPolicy retry
+        +run(docs, ids) BulkReport
+        +backoffDelay(failedSends)
+    }
+
+    class BulkTransport {
+        <<interface>>
+        +post(url, ndjsonBody) HttpResponse
+    }
+
+    class HttpBulkTransport {
+        +post(url, ndjsonBody) HttpResponse
+    }
+
+    class BulkReport {
+        +vector~ItemReceipt~ items
+        +chunksPlanned
+        +requestsSent
+        +backoffWaits
+    }
+
+    class ItemReceipt {
+        +index
+        +id
+        +status
+        +attempts
+        +httpStatus
+        +esResult
+        +errorType
+        +errorReason
+    }
+
+    BulkIndexer ..> BulkTransport
+    HttpBulkTransport ..|> BulkTransport
+    ESClient ..> HttpBulkTransport
+    ESClient ..> BulkIndexer
 
     class HttpClient {
         +get(url, headers)
@@ -66,6 +107,7 @@ classDiagram
 | 索引管理 | 删除索引   | 删除指定索引                   |
 | 索引管理 | 查看索引   | 获取索引信息                   |
 | 文档操作 | 添加文档   | 单条/批量添加                  |
+| 文档操作 | 可靠批量导入 | 可控分块、逐项回执（保持原序）、429/502/503/504 与短暂传输失败的有上限退避重试、永久错误立即失败、断连同批重放幂等 |
 | 文档操作 | 获取文档   | 根据 ID 获取                   |
 | 文档操作 | 更新文档   | 更新指定文档                   |
 | 文档操作 | 删除文档   | 删除指定文档                   |
@@ -114,12 +156,18 @@ es-cpp-demo/
 │   ├── Dockerfile
 │   ├── include/
 │   │   ├── es_client.hpp
+│   │   ├── bulk_indexer.hpp
 │   │   ├── http_client.hpp
-│   │   └── json.hpp
+│   │   └── nlohmann/
 │   ├── src/
 │   │   ├── main.cpp
 │   │   ├── es_client.cpp
+│   │   ├── bulk_indexer.cpp
+│   │   ├── bulk_transport_http.cpp
 │   │   └── http_client.cpp
+│   ├── demo/bulk_receipt_demo.cpp
+│   ├── tests/test_bulk_indexer.cpp
+│   ├── testutil/fake_es.hpp
 │   └── data/
 │       └── sample_data.json
 ├── docker-compose.yml
@@ -128,3 +176,17 @@ es-cpp-demo/
 └── docs/
     └── project_design.md
 ```
+
+## 7. 可靠批量导入的关键决策
+
+- **稳定业务 ID 是幂等前提**：动作行固定 `{"index":{"_index":...,"_id":业务ID}}`，
+  因此响应前断连后重放同一分块只会覆盖同 `_id` 文档，不产生重复；无 ID /
+  ID 数量不匹配 / ID 重复在发送前拒绝。
+- **重试白名单**：仅 429、502、503、504 与响应到达前的传输故障可重试；
+  400（mapping 校验等）立即永久失败，避免无意义放大流量。
+- **只重试未确认项**：整批限流重发整块；200 内个别条目失败时，后续请求
+  只携带这些 `_id`。
+- **退避可替换**：`RetryPolicy` 暴露 `sleep(ms)` 与 `jitter()` 两个注入点，
+  默认实现为 `sleep_for` + `mt19937`，测试注入零延迟与固定抖动。
+- **传输抽象**：核心逻辑只依赖 `BulkTransport` 接口，libcurl 适配与
+  脚本化内存版 ES 可互换，离线即可证明全部重试边界。

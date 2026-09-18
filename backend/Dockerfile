@@ -18,21 +18,22 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # 设置工作目录
 WORKDIR /app
 
-# 下载 nlohmann/json 头文件
-RUN mkdir -p include && \
-    curl -sL https://github.com/nlohmann/json/releases/download/v3.11.3/json.hpp -o include/json.hpp
+# nlohmann/json 已随仓库内置在 include/nlohmann/，无需联网下载
 
-# 复制源代码
+# 源代码
 COPY CMakeLists.txt .
-COPY include/http_client.hpp include/
-COPY include/es_client.hpp include/
+COPY include/ include/
 COPY src/ src/
+COPY demo/ demo/
+COPY tests/ tests/
+COPY testutil/ testutil/
 COPY data/ data/
 
-# 构建项目
+# 构建项目（同时构建主程序、离线回执演示与单元测试）
 RUN mkdir build && cd build \
     && cmake -DCMAKE_BUILD_TYPE=Release .. \
-    && make -j$(nproc)
+    && make -j$(nproc) \
+    && ctest --output-on-failure
 
 # 第二阶段：运行
 FROM --platform=$TARGETPLATFORM debian:bookworm-slim AS runtime
@@ -51,6 +52,7 @@ WORKDIR /app
 
 # 从构建阶段复制可执行文件和数据
 COPY --from=builder /app/build/es_demo .
+COPY --from=builder /app/build/bulk_receipt_demo .
 COPY --from=builder /app/build/data ./data
 
 # 设置文件权限
