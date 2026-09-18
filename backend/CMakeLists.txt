@@ -41,6 +41,7 @@ set(SOURCES
     src/main.cpp
     src/http_client.cpp
     src/es_client.cpp
+    src/bulk_writer.cpp
 )
 
 # 可执行文件
@@ -48,6 +49,24 @@ add_executable(es_demo ${SOURCES})
 
 # 链接库
 target_link_libraries(es_demo PRIVATE ${CURL_LIBRARIES})
+
+# ==================== 可靠批量写入：离线回执演示 ====================
+# 仅依赖可注入传输层的 BulkWriter + 内存假 ES，无需 libcurl / Elasticsearch，
+# 运营人员可直接运行查看「已写入 / 重试后成功 / 不可重试」三类回执与幂等结论。
+add_executable(bulk_receipt_demo
+    src/bulk_demo.cpp
+    src/bulk_writer.cpp
+    src/bulk_test_support.cpp
+)
+
+# ==================== 自动化测试（假 ES，零真实等待） ====================
+enable_testing()
+add_executable(bulk_writer_test
+    tests/bulk_writer_test.cpp
+    src/bulk_writer.cpp
+    src/bulk_test_support.cpp
+)
+add_test(NAME bulk_writer_test COMMAND bulk_writer_test)
 
 # 安装规则
 install(TARGETS es_demo DESTINATION bin)

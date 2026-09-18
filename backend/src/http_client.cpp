@@ -146,19 +146,25 @@ HttpResponse HttpClient::post(const std::string& url,
     curl_easy_setopt(pImpl->curl, CURLOPT_HEADERDATA, &response.headers);
     curl_easy_setopt(pImpl->curl, CURLOPT_TIMEOUT, pImpl->timeout);
     curl_easy_setopt(pImpl->curl, CURLOPT_CONNECTTIMEOUT, pImpl->connectTimeout);
-    
-    // 设置请求头
+
     struct curl_slist* headerList = nullptr;
-    headerList = curl_slist_append(headerList, "Content-Type: application/json");
+    // 调用方自行指定 Content-Type 时（如 bulk 需要 application/x-ndjson）不再追加默认值
+    bool hasContentType = false;
+    for (const auto& [key, value] : headers) {
+        if (key == "Content-Type") { hasContentType = true; break; }
+    }
+    if (!hasContentType) {
+        headerList = curl_slist_append(headerList, "Content-Type: application/json");
+    }
     for (const auto& [key, value] : headers) {
         std::string header = key + ": " + value;
         headerList = curl_slist_append(headerList, header.c_str());
     }
     curl_easy_setopt(pImpl->curl, CURLOPT_HTTPHEADER, headerList);
-    
+
     CURLcode res = curl_easy_perform(pImpl->curl);
     curl_slist_free_all(headerList);
-    
+
     if (res != CURLE_OK) {
         throw HttpException(std::string("POST request failed: ") + curl_easy_strerror(res));
     }

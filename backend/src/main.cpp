@@ -4,6 +4,7 @@
 #include <thread>
 #include <chrono>
 #include <cstdlib>
+#include <iomanip>
 
 using namespace es;
 using json = nlohmann::json;
@@ -18,6 +19,7 @@ namespace Color {
     const std::string BLUE    = "\033[34m";
     const std::string MAGENTA = "\033[35m";
     const std::string CYAN    = "\033[36m";
+    const std::string GRAY    = "\033[90m";
     const std::string BOLD    = "\033[1m";
 }
 
@@ -172,22 +174,88 @@ void demoCreateIndex(ESClient& client, const std::string& indexName) {
 }
 
 void demoBulkIndex(ESClient& client, const std::string& indexName) {
-    printSection(3, "批量导入文档");
-    
+    printSection(3, "批量导入文档（可控分块 + 逐项回执 + 退避重试）");
+
     auto articles = getSampleArticles();
-    std::vector<std::string> ids = {"1", "2", "3", "4", "5"};
-    
-    try {
-        auto result = client.bulkIndex(indexName, articles, ids);
-        printSuccess("成功导入 " + std::to_string(result.successCount) + " 篇文章");
-        
-        if (result.failCount > 0) {
-            printError("失败 " + std::to_string(result.failCount) + " 篇");
+    // 第 6 条刻意构造 mapping 坏数据：created_at 不是 yyyy-MM-dd，
+    // ES 将以 400 mapper_parsing_exception 永久拒绝该条。
+    articles.push_back({
+        {"title", "坏数据示例"},
+        {"content", "created_at 字段格式非法，用于演示永久失败立即留在失败清单。"},
+        {"author", "合作方"},
+        {"category", "技术"},
+        {"tags", json::array({"测试"})},
+        {"created_at", "not-a-date"}
+    });
+    std::vector<std::string> ids = {"1", "2", "3", "4", "5", "bad-6"};
+
+    BulkOptions options;
+    options.chunkSize = 3;   // 每块至多 3 条，演示分块
+    options.maxAttempts = 4; // 单条最多尝试 4 次
+
+    auto printReceipt = [&](const BulkReceipt& receipt) {
+        std::cout << "  " << Color::BOLD
+                  << "序号 业务ID 最终状态       尝试 HTTP 错误原因\n"
+                  << Color::RESET;
+        for (const auto& it : receipt.items) {
+            std::string zh;
+            std::string color;
+            switch (it.status) {
+                case ItemStatus::Written:
+                    zh = "已写入"; color = Color::GREEN; break;
+                case ItemStatus::RetriedSuccess:
+                    zh = "重试后成功"; color = Color::YELLOW; break;
+                case ItemStatus::FailedPermanent:
+                    zh = "不可重试"; color = Color::RED; break;
+                case ItemStatus::RetriesExhausted:
+                    zh = "重试耗尽"; color = Color::RED; break;
+            }
+            std::cout << "  " << (it.index + 1) << "    "
+                      << std::setw(7) << std::left << it.id
+                      << color << std::setw(12) << zh << Color::RESET << " "
+                      << std::setw(4) << it.attempts << " "
+                      << std::setw(4) << it.httpStatus << " "
+                      << (it.error.empty() ? "-" : it.error) << "\n";
         }
-        
-        // 刷新索引使文档可搜索
+    };
+
+    try {
+        auto result = client.bulkIndexWithReceipt(indexName, articles, ids,
+                                                  options);
+        printReceipt(result);
+        std::cout << "\n  汇总："
+                  << Color::GREEN << "已写入 "
+                  << result.count(ItemStatus::Written) << Color::RESET << "，"
+                  << Color::YELLOW << "重试后成功 "
+                  << result.count(ItemStatus::RetriedSuccess) << Color::RESET
+                  << "，" << Color::RED << "不可重试 "
+                  << result.count(ItemStatus::FailedPermanent) << Color::RESET
+                  << "；共 " << result.requestCount << " 个请求 / "
+                  << result.chunkCount << " 个分块\n";
+
         client.refreshIndex(indexName);
-        printInfo("索引已刷新，文档可搜索");
+        long count = client.documentCount(indexName);
+        printInfo("索引已刷新，当前文档总数: " + std::to_string(count));
+
+        // 整批原样再投：稳定业务 ID 幂等覆盖，文档总数不应变化
+        printInfo("再次提交同一业务批次（验证不产生重复文档）...");
+        auto result2 = client.bulkIndexWithReceipt(indexName, articles, ids,
+                                                   options);
+        client.refreshIndex(indexName);
+        long count2 = client.documentCount(indexName);
+        std::cout << "  再投后文档总数: " << count2 << "\n";
+        if (count2 == count) {
+            printSuccess("文档总数不变，重复提交安全");
+        } else {
+            printError("文档总数发生变化：" + std::to_string(count) + " -> " +
+                       std::to_string(count2));
+        }
+        std::cout << Color::GRAY
+                  << "  （坏数据 bad-6 仍在失败清单中，修正 created_at 后以同一 ID 重投即可）\n"
+                  << Color::RESET;
+    } catch (const BulkValidationError& e) {
+        printError(std::string("批次在发送前被拒绝: ") + e.what());
+        throw;
     } catch (const std::exception& e) {
         printError(std::string("批量导入失败: ") + e.what());
         throw;

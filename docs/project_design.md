@@ -37,7 +37,39 @@ classDiagram
         +deleteDocument(index, id)
         +search(index, query)
         +bulkIndex(index, docs)
+        +bulkIndexWithReceipt(index, docs, ids, options, sleeper, jitter)
+        +documentCount(index)
     }
+
+    class BulkWriter {
+        -IBulkTransport transport
+        -ISleeper sleeper
+        -IJitter jitter
+        -BulkOptions options
+        +write(docs, ids) BulkReceipt
+    }
+
+    class IBulkTransport {
+        <<interface>>
+        +sendBulk(path, ndjson) BulkTransportResponse
+    }
+
+    class ISleeper {
+        <<interface>>
+        +sleepFor(milliseconds)
+    }
+
+    class IJitter {
+        <<interface>>
+        +next() double
+    }
+
+    ESClient --> BulkWriter : 可靠批量导入
+    BulkWriter --> IBulkTransport
+    BulkWriter --> ISleeper
+    BulkWriter --> IJitter
+    CurlBulkTransport ..|> IBulkTransport
+    ESClient --> HttpClient
 
     class HttpClient {
         +get(url, headers)

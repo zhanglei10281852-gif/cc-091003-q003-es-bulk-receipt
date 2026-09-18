@@ -5,6 +5,41 @@
 
 namespace es {
 
+namespace {
+
+/**
+ * 把 libcurl 传输层适配为 BulkWriter 所需的 IBulkTransport：
+ * 拿到了 HTTP 响应（任何状态码）即正常返回；仅在响应到达前链路中断
+ * （连接重置、超时等 curl 错误）时转译为 TransientTransportError，
+ * BulkWriter 据此可凭稳定 _id 安全重放同一分块。
+ */
+class CurlBulkTransport final : public IBulkTransport {
+public:
+    CurlBulkTransport(HttpClient& client, std::string baseUrl)
+        : client_(client), baseUrl_(std::move(baseUrl)) {}
+
+    BulkTransportResponse sendBulk(const std::string& path,
+                                   const std::string& ndjsonBody) override {
+        try {
+            // ES 要求 bulk 请求体使用 x-ndjson
+            HttpResponse resp = client_.post(
+                baseUrl_ + path, ndjsonBody,
+                {{"Content-Type", "application/x-ndjson"}});
+            return {resp.statusCode, resp.body};
+        } catch (const HttpException& e) {
+            throw TransientTransportError(
+                std::string("bulk transport failure before response: ") +
+                e.what());
+        }
+    }
+
+private:
+    HttpClient& client_;
+    std::string baseUrl_;
+};
+
+} // namespace
+
 // ==================== 构造与析构 ====================
 
 ESClient::ESClient(const std::string& host, int port) {
@@ -251,8 +286,40 @@ BulkResult ESClient::bulkIndex(const std::string& indexName,
     } else {
         throw ESException("Bulk index failed: " + response.body);
     }
-    
+
     return result;
+}
+
+BulkReceipt ESClient::bulkIndexWithReceipt(
+    const std::string& indexName,
+    const std::vector<json>& docs,
+    const std::vector<std::string>& ids,
+    const BulkOptions& options,
+    std::shared_ptr<ISleeper> sleeper,
+    std::shared_ptr<IJitter> jitter) {
+    auto transport = std::make_shared<CurlBulkTransport>(httpClient_, baseUrl_);
+    BulkWriter writer(std::move(transport), indexName, options,
+                      std::move(sleeper), std::move(jitter));
+
+    BulkReceipt receipt = writer.write(docs, ids);
+
+    std::ostringstream oss;
+    oss << "Reliable bulk done: " << receipt.confirmedCount() << " confirmed ("
+        << receipt.count(ItemStatus::Written) << " written, "
+        << receipt.count(ItemStatus::RetriedSuccess) << " after retry), "
+        << receipt.failedCount() << " failed, in " << receipt.requestCount
+        << " request(s) across " << receipt.chunkCount << " chunk(s)";
+    log(oss.str());
+    return receipt;
+}
+
+long ESClient::documentCount(const std::string& indexName) {
+    auto response = httpClient_.get(
+        buildUrl("/" + indexName + "/_count"));
+    if (!response.isSuccess()) {
+        throw ESException("Failed to get document count: " + response.body);
+    }
+    return json::parse(response.body).value("count", 0L);
 }
 
 // ==================== 搜索操作 ====================

@@ -2,6 +2,7 @@
 #define ES_CLIENT_HPP
 
 #include "http_client.hpp"
+#include "bulk_writer.hpp"
 #include "json.hpp"
 #include <string>
 #include <vector>
@@ -164,6 +165,34 @@ public:
     BulkResult bulkIndex(const std::string& indexName,
                          const std::vector<json>& docs,
                          const std::vector<std::string>& ids = {});
+
+    /**
+     * 可靠批量索引：可控分块 + 逐项回执 + 有界退避重试。
+     *
+     * 与 bulkIndex 的区别：
+     *  - ids 必填且与 docs 等长、非空、不重复（稳定业务 ID，幂等去重）；
+     *  - 空批次、ID 数量不匹配、单条超过分块字节限制在发送前抛
+     *    BulkValidationError，保证尚未发出任何请求；
+     *  - 429/502/503/504 及响应前传输失败只重试未确认条目（上限 maxAttempts）；
+     *  - mapping 校验等永久错误立即留在失败清单，不重试；
+     *  - 回执严格保持输入顺序，含最终状态/尝试次数/HTTP 状态/精简错误原因。
+     *
+     * @param options 分块与退避策略
+     * @param sleeper 退避时钟（默认真实睡眠，测试可替换）
+     * @param jitter  随机抖动源（默认随机，测试可替换）
+     */
+    BulkReceipt bulkIndexWithReceipt(
+        const std::string& indexName,
+        const std::vector<json>& docs,
+        const std::vector<std::string>& ids,
+        const BulkOptions& options = {},
+        std::shared_ptr<ISleeper> sleeper = nullptr,
+        std::shared_ptr<IJitter> jitter = nullptr);
+
+    /**
+     * 获取索引文档总数（GET /{index}/_count）
+     */
+    long documentCount(const std::string& indexName);
     
     // ==================== 搜索操作 ====================
     

@@ -75,9 +75,60 @@ make
 
 - ✅ 添加文档
 - ✅ 批量添加文档
+- ✅ 可靠批量导入：可控分块、逐项回执、有界退避重试（见下）
 - ✅ 获取文档
 - ✅ 更新文档
 - ✅ 删除文档
+
+### 可靠批量导入（`bulkIndexWithReceipt`）
+
+针对限流导致的「同批部分成功 / 部分 429、还夹着坏记录」场景：
+
+- **稳定业务 ID 幂等**：调用方为每条文章提供非空、唯一的业务 ID；
+  整批重放或「响应前断开后重发」只覆盖同 `_id` 文档，**不会产生第二份文章**。
+- **可控分块**：同时受每块条目数（`chunkSize`）与请求体字节数（`maxChunkBytes`）约束。
+- **逐项回执并保持原序**：每条给出最终状态、尝试次数、HTTP 状态与精简错误原因。
+  - 🟢 **已写入**（首次成功）／🟡 **重试后成功**（429、502/503/504、断连后成功）
+  - 🔴 **不可重试**（mapping 等 4xx 永久错误，立即留在失败清单，不浪费重试）
+  - 另有 **重试耗尽**（可重试错误达到 `maxAttempts`，稍后再投即可）
+- **发送前拒绝**：空批次、ID 数量不匹配、空/重复 ID、单条超过分块字节限制，
+  抛 `BulkValidationError`，保证尚未发出任何请求。
+- **可替换时钟与抖动**：`ISleeper`/`IJitter` 可注入，自动化测试零真实等待即可验证重试边界。
+
+详见 [docs/bulk_import.md](docs/bulk_import.md)。
+
+#### 离线回执演示与自动化测试（无需 Elasticsearch）
+
+```bash
+cd backend
+
+# 运营回执演示：脚本化假 ES 复现「成功 + 429 重试成功 + mapping 坏数据 + 断连重放」，
+# 并再次提交同一业务批次，展示三类记录与文档总数不变。
+g++ -std=c++17 -Iinclude -I<nlohmann json 头文件目录> \
+    src/bulk_demo.cpp src/bulk_writer.cpp src/bulk_test_support.cpp -o bulk_demo && ./bulk_demo
+
+# 自动化测试（132+ 断言，零真实等待）
+g++ -std=c++17 -Iinclude -I<nlohmann json 头文件目录> \
+    tests/bulk_writer_test.cpp src/bulk_writer.cpp src/bulk_test_support.cpp \
+    -o bulk_test && ./bulk_test
+
+# 或用 CMake（完整工程；Docker 构建阶段会自动执行 ctest）
+cmake -S . -B build && cmake --build build && (cd build && ctest --output-on-failure)
+```
+
+回执演示输出形如：
+
+```
+[第一次提交] 逐项回执（保持原输入顺序）
+  序号  业务ID        状态          尝试  HTTP  精简错误原因
+  1     partner-001   重试后成功     2     201   -
+  ...
+  3     partner-003   不可重试       2     400   mapper_parsing_exception: failed to parse ...
+  5     partner-005   重试后成功     2     201   -
+  汇总：已写入 2，重试后成功 3，不可重试 1
+  搜索库文档总数（第一次提交后）：5
+[第二次提交] ... 文档总数仍为 5  ✓ 重复提交安全
+```
 
 ### 全文检索
 
@@ -117,12 +168,19 @@ make
 │   ├── Dockerfile          # Docker 镜像构建
 │   ├── include/            # 头文件
 │   │   ├── es_client.hpp   # ES 客户端类
+│   │   ├── bulk_writer.hpp # 可靠批量写入（分块/回执/退避，传输可注入）
+│   │   ├── bulk_test_support.hpp # 内存假 ES / 假时钟（演示与测试用）
 │   │   ├── http_client.hpp # HTTP 客户端类
 │   │   └── json.hpp        # nlohmann/json 库
 │   ├── src/                # 源代码
 │   │   ├── main.cpp        # 主程序入口
+│   │   ├── bulk_demo.cpp   # 离线运营回执演示
+│   │   ├── bulk_writer.cpp # 可靠批量写入实现
+│   │   ├── bulk_test_support.cpp # 假 ES 实现
 │   │   ├── es_client.cpp   # ES 客户端实现
 │   │   └── http_client.cpp # HTTP 客户端实现
+│   ├── tests/              # 自动化测试
+│   │   └── bulk_writer_test.cpp # 批量写入测试（零真实等待）
 │   └── data/               # 示例数据
 │       └── sample_data.json
 ├── docs/                   # 文档

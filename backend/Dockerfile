@@ -26,13 +26,17 @@ RUN mkdir -p include && \
 COPY CMakeLists.txt .
 COPY include/http_client.hpp include/
 COPY include/es_client.hpp include/
+COPY include/bulk_writer.hpp include/
+COPY include/bulk_test_support.hpp include/
 COPY src/ src/
+COPY tests/ tests/
 COPY data/ data/
 
-# 构建项目
+# 构建项目，并在镜像构建阶段运行批量写入自动化测试（假 ES、零等待）
 RUN mkdir build && cd build \
     && cmake -DCMAKE_BUILD_TYPE=Release .. \
-    && make -j$(nproc)
+    && make -j$(nproc) \
+    && ctest --output-on-failure
 
 # 第二阶段：运行
 FROM --platform=$TARGETPLATFORM debian:bookworm-slim AS runtime
